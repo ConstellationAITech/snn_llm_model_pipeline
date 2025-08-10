@@ -72,6 +72,7 @@ model_pipeline:
         - "交差は発火パターンのAND演算"
         - "強度はminを取る"
         - "抑制スパイクは交差前に除外"
+　　　　　formula: "C(Q) = ( ⋂_{q∈Q} E(q) ) \\ Q"
       output:
         - meaning_graph: Hypergraph(V, E)
         - common_nodes: list[node]
