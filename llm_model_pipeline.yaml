@@ -2,17 +2,16 @@ model_pipeline:
   layers:
     - name: 入力層
       description: >
-        JSONファイルから1オブジェクトずつ読み込み、トークン列や品詞情報などの特徴を取得する。
         pos_to_ids_mapping に基づき、内容語IDと重要度に応じたスパイク符号化を行う。
       input:
         - token_ids: int[] # トークンID列
-        - pos_ids: int[]   # 品詞ID列（mecab/ginza対応）
+        - pos_ids: int[]   # 品詞ID列
         - content_word_ids: int[] # 内容語ID列
         - dependency_ids: int[] # 係り先の文節ID
         - dependency_label_ids: int[] # 係り受けラベルID
       processing:
         - pos_to_ids_mapping と spike_encoding_rules を参照してスパイク列を生成
-        - 発火強弱は「いつ・どこで・誰が・何を・どうした」の5要素の重要度で決定
+        - 発火強弱は重要度で決定
 　　　　　　- 【本アーキテクチャの核心】: スパイクは[-1:抑制, 0:停止, +1:発火]の3値で伝播される。
 　　　　　　　加えて、従来の重みとは別に、文脈的重要度を示す「発火強度（発火の強弱）」を重みとして各スパイクに付与される。
       output:
