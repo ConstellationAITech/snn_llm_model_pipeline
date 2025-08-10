@@ -1,0 +1,147 @@
+model_pipeline:
+  layers:
+    - name: 入力層
+      description: >
+        JSONファイルから1オブジェクトずつ読み込み、トークン列や品詞情報などの特徴を取得する。
+        pos_to_ids_mapping に基づき、内容語IDと重要度に応じたスパイク符号化を行う。
+      input:
+        - token_ids: int[] # トークンID列
+        - pos_ids: int[]   # 品詞ID列（mecab/ginza対応）
+        - content_word_ids: int[] # 内容語ID列
+        - dependency_ids: int[] # 係り先の文節ID
+        - dependency_label_ids: int[] # 係り受けラベルID
+      processing:
+        - pos_to_ids_mapping と spike_encoding_rules を参照してスパイク列を生成
+        - 発火強弱は「いつ・どこで・誰が・何を・どうした」の5要素の重要度で決定
+      output:
+        - spike_sequence: int[] # +1発火, 0無発火, -1抑制
+
+    - name: 構文解析層
+      description: >
+        品詞や係り受け情報を元に文節や依存構造の初期形を作成する。
+      input:
+        - spike_sequence from 入力層
+        - pos_ids
+        - dependency_ids
+        - dependency_label_ids
+      processing:
+        - 文節単位にスパイクを集約
+        - 初期依存木を生成
+      output:
+        - dependency_tree: list[tuple(node_from, node_to, label)]
+        - spike_strength_map: dict[node, int]
+
+    - name: 記憶層（構文解析後）
+      description: >
+        構文解析層の出力をもとに、長期的に重要なスパイクパターンを保存し、必要に応じて再利用する。
+      input:
+        - dependency_tree
+        - spike_strength_map
+      processing:
+        - 発火強度が閾値以上のノードやパターンを記憶
+        - FIFOまたは優先度キューで管理
+      output:
+        - memory_store: list[spike_pattern]
+
+    - name: メタ認知層（構文解析後）
+      description: >
+        記憶層のリプレイバッファを用いて過去の重要スパイクパターンを再生し、現在の文脈に統合。
+      input:
+        - current_spike_sequence
+        - memory_store
+      processing:
+        - バッファから重要スパイクを再挿入（強度は減衰）
+        - 抑制スパイク(-1)は優先的に反映
+      output:
+        - augmented_spike_sequence
+
+    - name: 意味理解層
+      description: >
+        内容語をノードとしたハイパーグラフ構造を構築し、ハイパーエッジの交差から共通項を抽出することで推論的意味理解を行う。
+      input:
+        - augmented_spike_sequence
+        - content_word_ids
+        - bunsetsu_units
+      processing:
+        - 文節単位で内容語をノード登録
+        - 文節内の全内容語の組み合わせをハイパーエッジ化
+        - クエリ集合Qに対して交差集合 C(Q) を求める
+      spike_encoding_rules:
+        - "交差は発火パターンのAND演算"
+        - "強度はminを取る"
+        - "抑制スパイクは交差前に除外"
+      output:
+        - meaning_graph: Hypergraph(V, E)
+        - common_nodes: list[node]
+
+    - name: 記憶層（意味理解後）
+      description: >
+        意味理解層の出力をもとに重要スパイクパターンを記憶。
+      input:
+        - meaning_graph
+        - augmented_spike_sequence
+      processing:
+        - 意味的に重要なノードのスパイクパターンを保存・管理
+      output:
+        - memory_store: list[spike_pattern]
+
+    - name: メタ認知層（意味理解後）
+      description: >
+        記憶層のスパイクリプレイを用い、意味理解の結果に反映させる。
+      input:
+        - augmented_spike_sequence
+        - memory_store
+      processing:
+        - 過去の重要スパイクを現在の文脈に再挿入し統合
+      output:
+        - augmented_spike_sequence_updated
+
+    - name: 依存構造層
+      description: >
+        構文解析層の依存情報に意味理解層と記憶/メタ認知層の結果を反映させ、意味優先型の依存構造を生成する。
+      input:
+        - dependency_tree
+        - meaning_graph
+        - augmented_spike_sequence_updated
+      processing:
+        - 依存エッジの重み再計算（構文スコア×意味強度）
+        - 閾値以下や抑制スパイクを含むエッジは削除
+        - 削除後は意味的近傍ノードから補完接続
+        - 木構造を保つように整形
+      output:
+        - refined_dependency_tree: list[tuple(node_from, node_to, label, weight)]
+
+    - name: 記憶層（依存構造後）
+      description: >
+        依存構造層の結果を元に重要スパイクパターンを記憶。
+      input:
+        - refined_dependency_tree
+      processing:
+        - 意味・構文を統合した重要情報を記憶
+      output:
+        - memory_store: list[spike_pattern]
+
+    - name: メタ認知層（依存構造後）
+      description: >
+        依存構造層後の記憶とリプレイを用いて最終調整を行う。
+      input:
+        - refined_dependency_tree
+        - memory_store
+      processing:
+        - 過去情報を参照し文脈を強化
+      output:
+        - final_spike_sequence
+
+    - name: 出力形成層
+      description: >
+        依存構造と意味グラフを元に、最終的な文章構造や知識表現を生成する。
+      input:
+        - refined_dependency_tree
+        - meaning_graph
+        - final_spike_sequence
+      processing:
+        - 語順決定
+        - 推論結果や文章を形成
+      output:
+        - final_text
+        - knowledge_representation
